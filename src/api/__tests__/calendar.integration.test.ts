@@ -18,18 +18,18 @@ vi.mock('../../services/CalendarFeedService');
 
 // Mock auth middleware
 vi.mock('../middleware/auth', () => ({
-  authMiddleware: {
-    requireAuth: vi.fn(() => (req: any, res: any, next: any) => {
-      // Mock authenticated user for protected routes
-      req.user = {
-        id: 'user-123',
-        username: 'testuser',
-        companyId: 'company-123'
-      };
-      next();
-    }),
-    redirectIfAuthenticated: vi.fn(() => (req: any, res: any, next: any) => next())
-  }
+    authMiddleware: {
+        requireAuth: vi.fn(() => (req: any, res: any, next: any) => {
+            // Mock authenticated user for protected routes
+            req.user = {
+                id: 'user-123',
+                username: 'testuser',
+                companyId: 'company-123'
+            };
+            next();
+        }),
+        redirectIfAuthenticated: vi.fn(() => (req: any, res: any, next: any) => next())
+    }
 }));
 
 describe('Calendar Routes Integration Tests', () => {
@@ -478,7 +478,7 @@ describe('Calendar Routes Integration Tests', () => {
                 expect(response.text).toContain('Add to Outlook');
                 expect(response.text).toContain('Add to Apple Calendar');
                 expect(response.text).toContain('Download iCal Feed');
-                
+
                 expect(mockUrlService.getCompanyByShareUrl).toHaveBeenCalledWith('cal-test-url-123');
                 expect(mockFeedService.getPublicEvents).toHaveBeenCalledWith('company-123');
                 expect(mockUrlService.generateCalendarSubscriptionUrls).toHaveBeenCalledWith('cal-test-url-123');
@@ -508,7 +508,7 @@ describe('Calendar Routes Integration Tests', () => {
                 expect(response.text).toContain('No upcoming events');
                 expect(response.text).toContain('Check back later for new events!');
                 expect(response.text).toContain('Subscribe to Our Calendar');
-                
+
                 expect(mockUrlService.getCompanyByShareUrl).toHaveBeenCalledWith('cal-test-url-123');
                 expect(mockFeedService.getPublicEvents).toHaveBeenCalledWith('company-123');
             });
@@ -525,7 +525,7 @@ describe('Calendar Routes Integration Tests', () => {
                 expect(response.status).toBe(404);
                 expect(response.text).toContain('Calendar Not Found');
                 expect(response.text).toContain('The calendar you\'re looking for doesn\'t exist');
-                
+
                 expect(mockUrlService.getCompanyByShareUrl).toHaveBeenCalledWith('non-existent-url');
                 expect(mockFeedService.getPublicEvents).not.toHaveBeenCalled();
             });
@@ -616,7 +616,7 @@ END:VCALENDAR`;
                 expect(response.headers['content-type']).toContain('text/calendar');
                 expect(response.headers['content-disposition']).toContain('Test Company-calendar.ics');
                 expect(response.text).toBe(mockICalFeed);
-                
+
                 expect(mockUrlService.getCompanyByShareUrl).toHaveBeenCalledWith('cal-test-url-123');
                 expect(mockFeedService.generateICalFeed).toHaveBeenCalledWith('company-123');
             });
@@ -630,7 +630,7 @@ END:VCALENDAR`;
 
                 // Act - First request to populate cache
                 await request(app).get('/calendar/cal-test-url-123/feed.ics');
-                
+
                 // Act - Second request should use cache
                 const response = await request(app)
                     .get('/calendar/cal-test-url-123/feed.ics');
@@ -652,7 +652,7 @@ END:VCALENDAR`;
                 // Assert
                 expect(response.status).toBe(404);
                 expect(response.text).toContain('Calendar not found');
-                
+
                 expect(mockUrlService.getCompanyByShareUrl).toHaveBeenCalledWith('non-existent-url');
                 expect(mockFeedService.generateICalFeed).not.toHaveBeenCalled();
             });
@@ -688,7 +688,7 @@ END:VCALENDAR`;
                 expect(response.status).toBe(200);
                 expect(response.headers['content-type']).toContain('text/calendar');
                 expect(response.text).toBe(mockICalFeed);
-                
+
                 expect(mockUrlService.getCompanyByShareUrl).toHaveBeenCalledWith('cal-test-url-123');
                 expect(mockFeedService.generateICalFeed).toHaveBeenCalledWith('company-123');
             });

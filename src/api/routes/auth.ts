@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { AuthenticationService } from '../../services/AuthenticationService';
 import { UserRepository } from '../../repositories/UserRepository';
 import { authMiddleware } from '../middleware/auth';
+import { AuthErrorCode, AuthErrorContext } from '../../types/errors';
 
 export interface LoginRequest {
   username: string;
@@ -16,6 +17,11 @@ export interface LoginResponse {
     companyId: string;
   };
   error?: string;
+  errorCode?: AuthErrorCode;
+  rateLimitInfo?: {
+    attemptsRemaining: number;
+    timeUntilReset: number;
+  };
 }
 
 export class AuthRoutes {
@@ -59,6 +65,9 @@ export class AuthRoutes {
    * Render login page
    */
   private renderLoginPage(req: Request, res: Response) {
+    // Extract error information from query parameters
+    const errorMessage = req.query.error as string;
+    const errorCode = req.query.code as string;
     const loginHtml = `
     <!DOCTYPE html>
     <html lang="en">
@@ -160,7 +169,11 @@ export class AuthRoutes {
                 <p>Sign in to manage your calendar</p>
             </div>
             
-            <div id="error-container"></div>
+            <div id="error-container">${errorMessage ? `
+                <div class="error-message">
+                    ${errorMessage}
+                </div>
+            ` : ''}</div>
             
             <form id="login-form">
                 <div class="form-group">
@@ -217,10 +230,22 @@ export class AuthRoutes {
                         // Redirect to dashboard
                         window.location.href = '/dashboard';
                     } else {
-                        // Show error
+                        // Show error with additional context
+                        let errorMessage = result.error || 'Login failed. Please try again.';
+                        
+                        // Add rate limit information if available
+                        if (result.rateLimitInfo) {
+                            if (result.rateLimitInfo.attemptsRemaining === 0) {
+                                const minutes = Math.ceil(result.rateLimitInfo.timeUntilReset / 60000);
+                                errorMessage += \` Please wait \${minutes} minute(s) before trying again.\`;
+                            } else if (result.rateLimitInfo.attemptsRemaining <= 2) {
+                                errorMessage += \` \${result.rateLimitInfo.attemptsRemaining} attempt(s) remaining.\`;
+                            }
+                        }
+                        
                         errorContainer.innerHTML = \`
                             <div class="error-message">
-                                \${result.error || 'Login failed. Please try again.'}
+                                \${errorMessage}
                             </div>
                         \`;
                     }
@@ -251,14 +276,26 @@ export class AuthRoutes {
     try {
       const { username, password }: LoginRequest = req.body;
 
+      // Create authentication context
+      const context: AuthErrorContext = {
+        username,
+        ipAddress: this.getClientIP(req),
+        userAgent: req.get('User-Agent')
+      };
+
       if (!username || !password) {
         return res.status(400).json({
           success: false,
-          error: 'Username and password are required'
+          error: 'Username and password are required',
+          errorCode: AuthErrorCode.MISSING_CREDENTIALS
         } as LoginResponse);
       }
 
-      const result = await this.authService.authenticate(username, password);
+      // Add rate limit info to context
+      const failedAttempts = this.authService.getFailedAttemptCount(username);
+      context.attemptCount = failedAttempts;
+
+      const result = await this.authService.authenticate(username, password, context);
 
       if (result.success && result.user && result.token) {
         // Set HTTP-only cookie for web sessions
@@ -267,6 +304,14 @@ export class AuthRoutes {
           secure: process.env.NODE_ENV === 'production',
           sameSite: 'strict',
           maxAge: 24 * 60 * 60 * 1000 // 24 hours
+        });
+
+        // Log successful login
+        console.log('Successful login:', {
+          username: result.user.username,
+          userId: result.user.id,
+          timestamp: new Date().toISOString(),
+          ipAddress: context.ipAddress
         });
 
         return res.json({
@@ -278,16 +323,34 @@ export class AuthRoutes {
           }
         } as LoginResponse);
       } else {
-        return res.status(401).json({
+        // Get rate limit information
+        const attemptsRemaining = Math.max(0, 5 - this.authService.getFailedAttemptCount(username));
+        const timeUntilReset = this.authService.getRateLimitTimeRemaining(username);
+
+        const statusCode = this.getStatusCodeForError(result.errorCode || AuthErrorCode.INVALID_CREDENTIALS);
+
+        const response: LoginResponse = {
           success: false,
-          error: result.error || 'Authentication failed'
-        } as LoginResponse);
+          error: result.error || 'Authentication failed',
+          errorCode: result.errorCode
+        };
+
+        // Add rate limit info if relevant
+        if (result.errorCode === AuthErrorCode.RATE_LIMIT_EXCEEDED || attemptsRemaining <= 2) {
+          response.rateLimitInfo = {
+            attemptsRemaining,
+            timeUntilReset
+          };
+        }
+
+        return res.status(statusCode).json(response);
       }
     } catch (error) {
       console.error('Login error:', error);
       return res.status(500).json({
         success: false,
-        error: 'Internal server error'
+        error: 'Internal server error',
+        errorCode: AuthErrorCode.SERVICE_UNAVAILABLE
       } as LoginResponse);
     }
   }
@@ -494,6 +557,39 @@ export class AuthRoutes {
         companyId: user.companyId
       }
     });
+  }
+
+  /**
+   * Get client IP address from request
+   */
+  private getClientIP(req: Request): string {
+    return (req.headers['x-forwarded-for'] as string)?.split(',')[0] ||
+           req.connection.remoteAddress ||
+           req.socket.remoteAddress ||
+           'unknown';
+  }
+
+  /**
+   * Get appropriate HTTP status code for authentication error
+   */
+  private getStatusCodeForError(errorCode: AuthErrorCode): number {
+    switch (errorCode) {
+      case AuthErrorCode.INVALID_CREDENTIALS:
+      case AuthErrorCode.TOKEN_EXPIRED:
+      case AuthErrorCode.TOKEN_INVALID:
+      case AuthErrorCode.TOKEN_BLACKLISTED:
+        return 401;
+      case AuthErrorCode.UNAUTHORIZED_ACCESS:
+        return 403;
+      case AuthErrorCode.MISSING_CREDENTIALS:
+        return 400;
+      case AuthErrorCode.RATE_LIMIT_EXCEEDED:
+        return 429;
+      case AuthErrorCode.SERVICE_UNAVAILABLE:
+        return 503;
+      default:
+        return 401;
+    }
   }
 
   getRouter(): Router {

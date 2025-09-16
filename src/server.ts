@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { authRoutes } from './api/routes/auth';
 import { eventRoutes } from './api/routes/events';
 import { calendarRoutes } from './api/routes/calendar';
+import { WidgetRoutes } from './api/routes/widget';
 
 // Load environment variables
 dotenv.config();
@@ -16,10 +17,17 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
+// Serve static files for widget
+app.use('/public', express.static('src/public'));
+
+// Initialize route instances
+const widgetRoutes = new WidgetRoutes();
+
 // Routes
 app.use('/', authRoutes.getRouter());
 app.use('/', eventRoutes.getRouter());
 app.use('/', calendarRoutes.getRouter());
+app.use('/widget', widgetRoutes.getRouter());
 
 // Root redirect
 app.get('/', (req, res) => {

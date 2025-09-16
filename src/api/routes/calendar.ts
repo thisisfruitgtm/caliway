@@ -3,6 +3,9 @@ import { UrlGenerationService } from '../../services/UrlGenerationService';
 import { CalendarFeedService } from '../../services/CalendarFeedService';
 import { CompanyRepository, EventRepository } from '../../repositories';
 import { authMiddleware } from '../middleware/auth';
+import { cacheService } from '../../services/CacheService';
+import { publicFeedRateLimit, publicViewRateLimit, apiRateLimit } from '../middleware/rateLimiting';
+import { securityMiddleware, validateShareUrl, securityHeaders, preventDataExposure, securityLogger } from '../middleware/security';
 
 export interface ShareUrlResponse {
   success: boolean;
@@ -17,20 +20,10 @@ export interface ShareUrlResponse {
   error?: string;
 }
 
-// Cache interface for feed caching
-interface FeedCache {
-  [companyId: string]: {
-    feed: string;
-    timestamp: number;
-  };
-}
-
 export class CalendarRoutes {
   private router: Router;
   private urlService: UrlGenerationService;
   private feedService: CalendarFeedService;
-  private feedCache: FeedCache = {};
-  private readonly CACHE_TTL = 15 * 60 * 1000; // 15 minutes in milliseconds
   private static instance: CalendarRoutes;
 
   constructor() {
@@ -46,6 +39,11 @@ export class CalendarRoutes {
   }
 
   private setupRoutes() {
+    // Apply security middleware to all routes
+    this.router.use(securityLogger);
+    this.router.use(securityHeaders);
+    this.router.use(securityMiddleware);
+
     // Calendar sharing page (GET)
     this.router.get('/calendar/share',
       authMiddleware.requireAuth({ redirectUrl: '/login' }),
@@ -54,41 +52,60 @@ export class CalendarRoutes {
 
     // Public calendar feed endpoints (no authentication required)
     this.router.get('/calendar/:shareUrl/feed.ics',
+      validateShareUrl,
+      publicFeedRateLimit,
+      preventDataExposure,
       this.getICalFeed.bind(this)
     );
 
     this.router.get('/calendar/:shareUrl/feed',
+      validateShareUrl,
+      publicFeedRateLimit,
+      preventDataExposure,
       this.getICalFeed.bind(this)
     );
 
     // Public calendar view (no authentication required)
     this.router.get('/calendar/:shareUrl',
+      validateShareUrl,
+      publicViewRateLimit,
+      preventDataExposure,
       this.getPublicCalendarView.bind(this)
     );
 
-    // API Routes - all require authentication
+    // API Routes - all require authentication and rate limiting
     this.router.get('/api/calendar/share-url',
+      apiRateLimit,
       authMiddleware.requireAuth({ returnJson: true }),
+      preventDataExposure,
       this.getShareableUrl.bind(this)
     );
 
     this.router.post('/api/calendar/generate-url',
+      apiRateLimit,
       authMiddleware.requireAuth({ returnJson: true }),
+      preventDataExposure,
       this.generateShareableUrl.bind(this)
     );
 
     this.router.get('/api/calendar/subscription-urls/:shareUrl',
+      apiRateLimit,
+      validateShareUrl,
       authMiddleware.requireAuth({ returnJson: true }),
+      preventDataExposure,
       this.getSubscriptionUrls.bind(this)
     );
 
     this.router.get('/api/calendar/embed-code',
+      apiRateLimit,
       authMiddleware.requireAuth({ returnJson: true }),
+      preventDataExposure,
       this.getEmbedCode.bind(this)
     );
 
     // Cache invalidation endpoint (authenticated)
     this.router.post('/api/calendar/invalidate-cache',
+      apiRateLimit,
       authMiddleware.requireAuth({ returnJson: true }),
       this.invalidateCache.bind(this)
     );
@@ -706,29 +723,17 @@ export class CalendarRoutes {
         return res.status(404).send('Calendar not found');
       }
 
-      // Check cache first
-      const cachedFeed = this.getCachedFeed(company.id);
-      if (cachedFeed) {
-        res.set({
-          'Content-Type': 'text/calendar; charset=utf-8',
-          'Content-Disposition': `attachment; filename="${company.name}-calendar.ics"`,
-          'Cache-Control': 'public, max-age=900', // 15 minutes
-          'X-Cache': 'HIT'
-        });
-        return res.send(cachedFeed);
-      }
-
-      // Generate fresh feed
+      // Generate feed (caching is handled internally by the service)
       const icalFeed = await this.feedService.generateICalFeed(company.id);
       
-      // Cache the feed
-      this.setCachedFeed(company.id, icalFeed);
+      // Check if this was a cache hit by comparing with fresh generation
+      const cacheHit = cacheService.getCachedFeed(company.id) === icalFeed;
 
       res.set({
         'Content-Type': 'text/calendar; charset=utf-8',
         'Content-Disposition': `attachment; filename="${company.name}-calendar.ics"`,
         'Cache-Control': 'public, max-age=900', // 15 minutes
-        'X-Cache': 'MISS'
+        'X-Cache': cacheHit ? 'HIT' : 'MISS'
       });
 
       return res.send(icalFeed);
@@ -1007,7 +1012,7 @@ export class CalendarRoutes {
   private async invalidateCache(req: Request, res: Response) {
     try {
       const user = req.user!;
-      this.invalidateCacheForCompany(user.companyId);
+      cacheService.invalidateCompanyCache(user.companyId);
 
       return res.json({
         success: true,
@@ -1023,45 +1028,10 @@ export class CalendarRoutes {
   }
 
   /**
-   * Get cached feed if still valid
-   */
-  private getCachedFeed(companyId: string): string | null {
-    const cached = this.feedCache[companyId];
-    if (!cached) return null;
-
-    const now = Date.now();
-    if (now - cached.timestamp > this.CACHE_TTL) {
-      delete this.feedCache[companyId];
-      return null;
-    }
-
-    return cached.feed;
-  }
-
-  /**
-   * Cache a feed for a company
-   */
-  private setCachedFeed(companyId: string, feed: string): void {
-    this.feedCache[companyId] = {
-      feed,
-      timestamp: Date.now()
-    };
-  }
-
-  /**
-   * Invalidate cache for a specific company
-   */
-  private invalidateCacheForCompany(companyId: string): void {
-    delete this.feedCache[companyId];
-  }
-
-  /**
    * Static method to invalidate cache from external services
    */
   static invalidateCacheForCompany(companyId: string): void {
-    if (CalendarRoutes.instance) {
-      CalendarRoutes.instance.invalidateCacheForCompany(companyId);
-    }
+    cacheService.invalidateCompanyCache(companyId);
   }
 
   /**

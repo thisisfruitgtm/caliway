@@ -1,39 +1,29 @@
 import { WidgetConfig } from '../models';
 import { BaseRepository } from './BaseRepository';
+import { supabaseAdmin } from '../config/supabase';
 
 export interface IWidgetConfigRepository {
-  findById(id: string): Promise<WidgetConfig | null>;
   findByCompanyId(companyId: string): Promise<WidgetConfig | null>;
-  create(configData: Omit<WidgetConfig, 'id' | 'createdAt' | 'updatedAt'>): Promise<WidgetConfig>;
-  update(id: string, configData: Partial<WidgetConfig>): Promise<WidgetConfig | null>;
-  updateByCompanyId(companyId: string, configData: Partial<WidgetConfig>): Promise<WidgetConfig | null>;
-  delete(id: string): Promise<boolean>;
-  deleteByCompanyId(companyId: string): Promise<boolean>;
+  create(configData: WidgetConfig): Promise<WidgetConfig>;
+  update(companyId: string, configData: Partial<WidgetConfig>): Promise<WidgetConfig | null>;
+  delete(companyId: string): Promise<boolean>;
 }
 
-// Extended WidgetConfig interface for database operations
-interface WidgetConfigWithId extends WidgetConfig {
-  id: string;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-export class WidgetConfigRepository extends BaseRepository<WidgetConfigWithId> implements IWidgetConfigRepository {
+export class WidgetConfigRepository extends BaseRepository<WidgetConfig> implements IWidgetConfigRepository {
   constructor() {
     super('widget_configs');
+    // Use admin client for widget configs to bypass RLS
+    this.client = supabaseAdmin;
   }
 
-  protected mapFromDatabase(data: any): WidgetConfigWithId {
+  protected mapFromDatabase(data: any): WidgetConfig {
     return {
-      id: data.id,
       companyId: data.company_id,
       theme: data.theme,
       primaryColor: data.primary_color,
       showUpcomingOnly: data.show_upcoming_only,
       maxEvents: data.max_events,
-      dateFormat: data.date_format,
-      createdAt: new Date(data.created_at),
-      updatedAt: new Date(data.updated_at)
+      dateFormat: data.date_format
     };
   }
 
@@ -46,8 +36,6 @@ export class WidgetConfigRepository extends BaseRepository<WidgetConfigWithId> i
     if (data.showUpcomingOnly !== undefined) dbData.show_upcoming_only = data.showUpcomingOnly;
     if (data.maxEvents !== undefined) dbData.max_events = data.maxEvents;
     if (data.dateFormat !== undefined) dbData.date_format = data.dateFormat;
-    if (data.createdAt !== undefined) dbData.created_at = data.createdAt;
-    if (data.updatedAt !== undefined) dbData.updated_at = data.updatedAt;
     
     return dbData;
   }
@@ -69,7 +57,25 @@ export class WidgetConfigRepository extends BaseRepository<WidgetConfigWithId> i
     return this.mapFromDatabase(data);
   }
 
-  async updateByCompanyId(companyId: string, configData: Partial<WidgetConfig>): Promise<WidgetConfig | null> {
+  // Override create to use company_id as primary key
+  async create(configData: WidgetConfig): Promise<WidgetConfig> {
+    const dbData = this.mapToDatabase(configData);
+    
+    const { data, error } = await this.client
+      .from(this.tableName)
+      .insert(dbData)
+      .select()
+      .single();
+
+    if (error) {
+      throw new Error(`Failed to create widget config: ${error.message}`);
+    }
+
+    return this.mapFromDatabase(data);
+  }
+
+  // Override update to use company_id as identifier
+  async update(companyId: string, configData: Partial<WidgetConfig>): Promise<WidgetConfig | null> {
     const dbData = this.mapToDatabase(configData);
     
     const { data, error } = await this.client
@@ -83,78 +89,23 @@ export class WidgetConfigRepository extends BaseRepository<WidgetConfigWithId> i
       if (error.code === 'PGRST116') {
         return null;
       }
-      throw new Error(`Failed to update widget config by company ID: ${error.message}`);
+      throw new Error(`Failed to update widget config: ${error.message}`);
     }
 
     return this.mapFromDatabase(data);
   }
 
-  async deleteByCompanyId(companyId: string): Promise<boolean> {
+  // Override delete to use company_id as identifier
+  async delete(companyId: string): Promise<boolean> {
     const { error } = await this.client
       .from(this.tableName)
       .delete()
       .eq('company_id', companyId);
 
     if (error) {
-      throw new Error(`Failed to delete widget config by company ID: ${error.message}`);
+      throw new Error(`Failed to delete widget config: ${error.message}`);
     }
 
     return true;
-  }
-
-  // Create or update widget config for a company (upsert functionality)
-  async upsertByCompanyId(companyId: string, configData: Omit<WidgetConfig, 'companyId'>): Promise<WidgetConfig> {
-    const fullConfigData = {
-      ...configData,
-      companyId
-    };
-
-    const dbData = this.mapToDatabase(fullConfigData);
-    
-    const { data, error } = await this.client
-      .from(this.tableName)
-      .upsert(dbData, { 
-        onConflict: 'company_id',
-        ignoreDuplicates: false 
-      })
-      .select()
-      .single();
-
-    if (error) {
-      throw new Error(`Failed to upsert widget config: ${error.message}`);
-    }
-
-    return this.mapFromDatabase(data);
-  }
-
-  // Get default widget config for a company
-  getDefaultConfig(companyId: string): WidgetConfig {
-    return {
-      companyId,
-      theme: 'light',
-      primaryColor: '#007bff',
-      showUpcomingOnly: true,
-      maxEvents: 10,
-      dateFormat: 'YYYY-MM-DD'
-    };
-  }
-
-  // Get widget config with fallback to defaults
-  async findByCompanyIdWithDefaults(companyId: string): Promise<WidgetConfig> {
-    const config = await this.findByCompanyId(companyId);
-    
-    if (!config) {
-      return this.getDefaultConfig(companyId);
-    }
-
-    // Convert WidgetConfigWithId to WidgetConfig by extracting only the needed fields
-    return {
-      companyId: config.companyId,
-      theme: config.theme,
-      primaryColor: config.primaryColor,
-      showUpcomingOnly: config.showUpcomingOnly,
-      maxEvents: config.maxEvents,
-      dateFormat: config.dateFormat
-    };
   }
 }

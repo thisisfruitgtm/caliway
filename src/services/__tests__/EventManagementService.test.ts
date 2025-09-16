@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { EventManagementService, CreateEventData, UpdateEventData } from '../EventManagementService';
 import { Event } from '../../models';
 import { IEventRepository } from '../../repositories/EventRepository';
+import { ICacheInvalidationService } from '../CacheInvalidationService';
 
 // Mock repository implementation
 class MockEventRepository implements IEventRepository {
@@ -102,13 +103,21 @@ class MockEventRepository implements IEventRepository {
   }
 }
 
+// Mock cache invalidation service
+class MockCacheInvalidationService implements ICacheInvalidationService {
+  invalidateCalendarFeed = vi.fn();
+  invalidateAllCaches = vi.fn();
+}
+
 describe('EventManagementService', () => {
   let service: EventManagementService;
   let mockRepository: MockEventRepository;
+  let mockCacheService: MockCacheInvalidationService;
 
   beforeEach(() => {
     mockRepository = new MockEventRepository();
-    service = new EventManagementService(mockRepository);
+    mockCacheService = new MockCacheInvalidationService();
+    service = new EventManagementService(mockRepository, mockCacheService);
   });
 
   describe('createEvent', () => {
@@ -130,6 +139,10 @@ describe('EventManagementService', () => {
       expect(result.event!.title).toBe('Team Meeting');
       expect(result.event!.companyId).toBe('test-company');
       expect(result.errors).toBeUndefined();
+      
+      // Verify cache invalidation was called
+      expect(mockCacheService.invalidateCalendarFeed).toHaveBeenCalledWith('test-company');
+      expect(mockCacheService.invalidateCalendarFeed).toHaveBeenCalledTimes(1);
     });
 
     it('should fail validation for missing required fields', async () => {
@@ -216,6 +229,10 @@ describe('EventManagementService', () => {
       expect(result.success).toBe(true);
       expect(result.event!.title).toBe('Updated Title');
       expect(result.event!.description).toBe('Updated Description');
+      
+      // Verify cache invalidation was called
+      expect(mockCacheService.invalidateCalendarFeed).toHaveBeenCalledWith(existingEvent.companyId);
+      expect(mockCacheService.invalidateCalendarFeed).toHaveBeenCalledTimes(1);
     });
 
     it('should fail when event does not exist', async () => {
@@ -270,6 +287,10 @@ describe('EventManagementService', () => {
 
       expect(result.success).toBe(true);
       expect(result.errors).toBeUndefined();
+
+      // Verify cache invalidation was called
+      expect(mockCacheService.invalidateCalendarFeed).toHaveBeenCalledWith(existingEvent.companyId);
+      expect(mockCacheService.invalidateCalendarFeed).toHaveBeenCalledTimes(1);
 
       // Verify event is deleted
       const getResult = await service.getEvent(existingEvent.id);
@@ -473,6 +494,67 @@ describe('EventManagementService', () => {
 
       expect(result.isValid).toBe(false);
       expect(result.errors.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('cache invalidation', () => {
+    beforeEach(() => {
+      // Reset mock call counts before each test
+      mockCacheService.invalidateCalendarFeed.mockClear();
+    });
+
+    it('should not invalidate cache when event creation fails', async () => {
+      const invalidEventData: CreateEventData = {
+        companyId: '',
+        title: '',
+        description: '',
+        startDateTime: new Date('2024-12-15T10:00:00Z'),
+        endDateTime: new Date('2024-12-15T11:00:00Z')
+      };
+
+      const result = await service.createEvent(invalidEventData);
+
+      expect(result.success).toBe(false);
+      expect(mockCacheService.invalidateCalendarFeed).not.toHaveBeenCalled();
+    });
+
+    it('should not invalidate cache when event update fails', async () => {
+      const updateData: UpdateEventData = {
+        title: 'Updated Title'
+      };
+
+      const result = await service.updateEvent('non-existent-id', updateData);
+
+      expect(result.success).toBe(false);
+      expect(mockCacheService.invalidateCalendarFeed).not.toHaveBeenCalled();
+    });
+
+    it('should not invalidate cache when event deletion fails', async () => {
+      const result = await service.deleteEvent('non-existent-id');
+
+      expect(result.success).toBe(false);
+      expect(mockCacheService.invalidateCalendarFeed).not.toHaveBeenCalled();
+    });
+
+    it('should handle cache invalidation errors gracefully', async () => {
+      // Make cache invalidation throw an error
+      mockCacheService.invalidateCalendarFeed.mockImplementation(() => {
+        throw new Error('Cache invalidation failed');
+      });
+
+      const eventData: CreateEventData = {
+        companyId: 'test-company',
+        title: 'Test Event',
+        description: 'Test Description',
+        startDateTime: new Date('2024-12-15T10:00:00Z'),
+        endDateTime: new Date('2024-12-15T11:00:00Z')
+      };
+
+      // Event creation should still succeed even if cache invalidation fails
+      const result = await service.createEvent(eventData);
+
+      expect(result.success).toBe(true);
+      expect(mockCacheService.invalidateCalendarFeed).toHaveBeenCalledWith('test-company');
     });
   });
 });

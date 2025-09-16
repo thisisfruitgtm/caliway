@@ -73,3 +73,8 @@ This feature is a web-based platform that enables companies to manage and share 
 2. WHEN a subscribed user's calendar application checks for updates THEN the system SHALL provide the latest event data
 3. WHEN an event is deleted THEN the system SHALL remove it from the subscription feed
 4. WHEN new events are added THEN the system SHALL include them in the subscription feed for automatic synchronization
+
+
+#### Acceptance
+
+1. When all tests are passed - push to Github

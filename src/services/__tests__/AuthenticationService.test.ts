@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { AuthenticationService } from '../AuthenticationService';
 import { User } from '../../models';
 import { IUserRepository } from '../../repositories/UserRepository';
+import { AuthErrorCode, AuthErrorContext } from '../../types/errors';
 
 // Mock dependencies
 vi.mock('bcrypt');
@@ -80,7 +81,8 @@ describe('AuthenticationService', () => {
       expect(result.success).toBe(false);
       expect(result.user).toBeUndefined();
       expect(result.token).toBeUndefined();
-      expect(result.error).toBe('Invalid credentials');
+      expect(result.error).toBe('Invalid username or password. Please check your credentials and try again.');
+      expect(result.errorCode).toBe(AuthErrorCode.INVALID_CREDENTIALS);
     });
 
     it('should fail authentication with invalid password', async () => {
@@ -95,7 +97,8 @@ describe('AuthenticationService', () => {
       expect(result.success).toBe(false);
       expect(result.user).toBeUndefined();
       expect(result.token).toBeUndefined();
-      expect(result.error).toBe('Invalid credentials');
+      expect(result.error).toBe('Invalid username or password. Please check your credentials and try again.');
+      expect(result.errorCode).toBe(AuthErrorCode.INVALID_CREDENTIALS);
       expect(mockUserRepository.updateLastLogin).not.toHaveBeenCalled();
     });
 
@@ -105,7 +108,8 @@ describe('AuthenticationService', () => {
 
       // Assert
       expect(result.success).toBe(false);
-      expect(result.error).toBe('Username and password are required');
+      expect(result.error).toBe('Please provide both username and password.');
+      expect(result.errorCode).toBe(AuthErrorCode.MISSING_CREDENTIALS);
       expect(mockUserRepository.findByUsername).not.toHaveBeenCalled();
     });
 
@@ -115,7 +119,8 @@ describe('AuthenticationService', () => {
 
       // Assert
       expect(result.success).toBe(false);
-      expect(result.error).toBe('Username and password are required');
+      expect(result.error).toBe('Please provide both username and password.');
+      expect(result.errorCode).toBe(AuthErrorCode.MISSING_CREDENTIALS);
       expect(mockUserRepository.findByUsername).not.toHaveBeenCalled();
     });
 
@@ -128,7 +133,75 @@ describe('AuthenticationService', () => {
 
       // Assert
       expect(result.success).toBe(false);
-      expect(result.error).toBe('Authentication service unavailable');
+      expect(result.error).toBe('Authentication service is temporarily unavailable. Please try again later.');
+      expect(result.errorCode).toBe(AuthErrorCode.SERVICE_UNAVAILABLE);
+    });
+
+    it('should implement rate limiting after multiple failed attempts', async () => {
+      // Arrange
+      mockUserRepository.findByUsername = vi.fn().mockResolvedValue(null);
+
+      // Act - Make 5 failed attempts
+      for (let i = 0; i < 5; i++) {
+        await authService.authenticate('testuser', 'wrongpassword');
+      }
+
+      // Try one more time - should be rate limited
+      const result = await authService.authenticate('testuser', 'wrongpassword');
+
+      // Assert
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Too many login attempts. Please wait before trying again.');
+      expect(result.errorCode).toBe(AuthErrorCode.RATE_LIMIT_EXCEEDED);
+    });
+
+    it('should clear failed attempts after successful login', async () => {
+      // Arrange
+      mockUserRepository.findByUsername = vi.fn()
+        .mockResolvedValueOnce(null) // First attempt fails
+        .mockResolvedValueOnce(mockUser); // Second attempt succeeds
+      mockUserRepository.updateLastLogin = vi.fn().mockResolvedValue(mockUser);
+      mockBcrypt.compare.mockResolvedValue(true);
+      mockJwt.sign.mockReturnValue('mock-jwt-token');
+
+      // Act - First failed attempt
+      await authService.authenticate('testuser', 'wrongpassword');
+      
+      // Second successful attempt
+      const result = await authService.authenticate('testuser', 'password123');
+
+      // Assert
+      expect(result.success).toBe(true);
+      expect(authService.getFailedAttemptCount('testuser')).toBe(0);
+    });
+
+    it('should include authentication context in error logging', async () => {
+      // Arrange
+      const context: AuthErrorContext = {
+        username: 'testuser',
+        ipAddress: '192.168.1.1',
+        userAgent: 'Mozilla/5.0',
+        attemptCount: 1
+      };
+      mockUserRepository.findByUsername = vi.fn().mockResolvedValue(null);
+      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      // Act
+      await authService.authenticate('testuser', 'wrongpassword', context);
+
+      // Assert
+      expect(consoleSpy).toHaveBeenCalledWith(
+        'Authentication failure:',
+        expect.objectContaining({
+          username: 'testuser',
+          success: false,
+          errorCode: AuthErrorCode.INVALID_CREDENTIALS,
+          ipAddress: '192.168.1.1',
+          userAgent: 'Mozilla/5.0'
+        })
+      );
+
+      consoleSpy.mockRestore();
     });
   });
 
@@ -162,7 +235,8 @@ describe('AuthenticationService', () => {
       // Assert
       expect(result.valid).toBe(false);
       expect(result.user).toBeUndefined();
-      expect(result.error).toBe('Token has expired');
+      expect(result.error).toBe('Your session has expired. Please log in again.');
+      expect(result.errorCode).toBe(AuthErrorCode.TOKEN_EXPIRED);
     });
 
     it('should fail validation for invalid token', async () => {
@@ -177,7 +251,8 @@ describe('AuthenticationService', () => {
       // Assert
       expect(result.valid).toBe(false);
       expect(result.user).toBeUndefined();
-      expect(result.error).toBe('Invalid token');
+      expect(result.error).toBe('Invalid session. Please log in again.');
+      expect(result.errorCode).toBe(AuthErrorCode.TOKEN_INVALID);
     });
 
     it('should fail validation when user not found', async () => {
@@ -192,7 +267,8 @@ describe('AuthenticationService', () => {
       // Assert
       expect(result.valid).toBe(false);
       expect(result.user).toBeUndefined();
-      expect(result.error).toBe('User not found');
+      expect(result.error).toBe('User account not found. Please contact your administrator.');
+      expect(result.errorCode).toBe(AuthErrorCode.USER_NOT_FOUND);
     });
 
     it('should fail validation for token without userId', async () => {
@@ -206,7 +282,8 @@ describe('AuthenticationService', () => {
       // Assert
       expect(result.valid).toBe(false);
       expect(result.user).toBeUndefined();
-      expect(result.error).toBe('Invalid token format');
+      expect(result.error).toBe('Invalid session. Please log in again.');
+      expect(result.errorCode).toBe(AuthErrorCode.TOKEN_INVALID);
     });
 
     it('should fail validation for blacklisted token', async () => {
@@ -219,7 +296,34 @@ describe('AuthenticationService', () => {
       // Assert
       expect(result.valid).toBe(false);
       expect(result.user).toBeUndefined();
-      expect(result.error).toBe('Token has been invalidated');
+      expect(result.error).toBe('Your session has been terminated. Please log in again.');
+      expect(result.errorCode).toBe(AuthErrorCode.TOKEN_BLACKLISTED);
+    });
+
+    it('should fail validation for empty token', async () => {
+      // Act
+      const result = await authService.validateSession('');
+
+      // Assert
+      expect(result.valid).toBe(false);
+      expect(result.user).toBeUndefined();
+      expect(result.error).toBe('Invalid session. Please log in again.');
+      expect(result.errorCode).toBe(AuthErrorCode.TOKEN_INVALID);
+    });
+
+    it('should handle session validation service errors', async () => {
+      // Arrange
+      mockJwt.verify.mockImplementation(() => {
+        throw new Error('Unexpected JWT error');
+      });
+
+      // Act
+      const result = await authService.validateSession('some-token');
+
+      // Assert
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('Authentication service is temporarily unavailable. Please try again later.');
+      expect(result.errorCode).toBe(AuthErrorCode.SERVICE_UNAVAILABLE);
     });
   });
 
@@ -236,7 +340,7 @@ describe('AuthenticationService', () => {
 
       // Assert
       expect(result.valid).toBe(false);
-      expect(result.error).toBe('Token has been invalidated');
+      expect(result.error).toBe('Your session has been terminated. Please log in again.');
     });
 
     it('should handle logout errors gracefully', async () => {
@@ -288,6 +392,59 @@ describe('AuthenticationService', () => {
         'test-secret-key',
         { expiresIn: '24h' }
       );
+    });
+  });
+
+  describe('rate limiting', () => {
+    it('should track failed attempt count', async () => {
+      // Arrange
+      mockUserRepository.findByUsername = vi.fn().mockResolvedValue(null);
+
+      // Act
+      await authService.authenticate('testuser', 'wrongpassword');
+      await authService.authenticate('testuser', 'wrongpassword');
+
+      // Assert
+      expect(authService.getFailedAttemptCount('testuser')).toBe(2);
+    });
+
+    it('should return rate limit time remaining', async () => {
+      // Arrange
+      mockUserRepository.findByUsername = vi.fn().mockResolvedValue(null);
+
+      // Act - Make 5 failed attempts to trigger rate limit
+      for (let i = 0; i < 5; i++) {
+        await authService.authenticate('testuser', 'wrongpassword');
+      }
+
+      // Assert
+      const timeRemaining = authService.getRateLimitTimeRemaining('testuser');
+      expect(timeRemaining).toBeGreaterThan(0);
+      expect(timeRemaining).toBeLessThanOrEqual(15 * 60 * 1000); // 15 minutes max
+    });
+
+    it('should reset rate limit after lockout period', async () => {
+      // Arrange
+      mockUserRepository.findByUsername = vi.fn().mockResolvedValue(null);
+
+      // Act - Make 5 failed attempts
+      for (let i = 0; i < 5; i++) {
+        await authService.authenticate('testuser', 'wrongpassword');
+      }
+
+      // Simulate time passing by manipulating the internal state
+      // In a real scenario, you'd wait or use fake timers
+      const attempts = (authService as any).loginAttempts.get('testuser');
+      if (attempts) {
+        attempts.lastAttempt = new Date(Date.now() - 16 * 60 * 1000); // 16 minutes ago
+      }
+
+      // Try again - should not be rate limited
+      const result = await authService.authenticate('testuser', 'wrongpassword');
+
+      // Assert
+      expect(result.errorCode).toBe(AuthErrorCode.INVALID_CREDENTIALS);
+      expect(result.errorCode).not.toBe(AuthErrorCode.RATE_LIMIT_EXCEEDED);
     });
   });
 });

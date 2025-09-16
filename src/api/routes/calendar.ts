@@ -746,7 +746,7 @@ export class CalendarRoutes {
   /**
    * Get public calendar view for a company
    */
-  private async getPublicCalendarView(req: Request, res: Response) {
+  private async getPublicCalendarView(req: Request, res: Response): Promise<void | Response> {
     try {
       const { shareUrl } = req.params;
 

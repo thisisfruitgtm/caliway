@@ -4,7 +4,7 @@ import { securityService } from '../../services/SecurityService';
 /**
  * Security middleware for input validation and sanitization
  */
-export function securityMiddleware(req: Request, res: Response, next: NextFunction) {
+export function securityMiddleware(req: Request, res: Response, next: NextFunction): void | Response {
   try {
     // Validate and sanitize query parameters
     if (req.query && Object.keys(req.query).length > 0) {
@@ -54,7 +54,7 @@ export function securityMiddleware(req: Request, res: Response, next: NextFuncti
 /**
  * Middleware to validate company ID parameter
  */
-export function validateCompanyId(req: Request, res: Response, next: NextFunction) {
+export function validateCompanyId(req: Request, res: Response, next: NextFunction): void | Response {
   const companyId = req.params.companyId || req.body.companyId || req.query.companyId;
   
   if (!companyId) {
@@ -81,7 +81,7 @@ export function validateCompanyId(req: Request, res: Response, next: NextFunctio
 /**
  * Middleware to validate share URL parameter
  */
-export function validateShareUrl(req: Request, res: Response, next: NextFunction) {
+export function validateShareUrl(req: Request, res: Response, next: NextFunction): void | Response {
   const shareUrl = req.params.shareUrl || req.body.shareUrl || req.query.shareUrl;
   
   if (!shareUrl) {
@@ -108,7 +108,7 @@ export function validateShareUrl(req: Request, res: Response, next: NextFunction
 /**
  * Middleware to sanitize event data in request body
  */
-export function sanitizeEventData(req: Request, res: Response, next: NextFunction) {
+export function sanitizeEventData(req: Request, res: Response, next: NextFunction): void | Response {
   if (req.body && typeof req.body === 'object') {
     const validation = securityService.validatePublicEventData(req.body);
     if (!validation.isValid) {
@@ -129,7 +129,7 @@ export function sanitizeEventData(req: Request, res: Response, next: NextFunctio
 /**
  * Middleware to add security headers
  */
-export function securityHeaders(req: Request, res: Response, next: NextFunction) {
+export function securityHeaders(req: Request, res: Response, next: NextFunction): void {
   // Set security headers
   res.set({
     'X-Content-Type-Options': 'nosniff',
@@ -146,7 +146,7 @@ export function securityHeaders(req: Request, res: Response, next: NextFunction)
 /**
  * Middleware to prevent sensitive data exposure in public endpoints
  */
-export function preventDataExposure(req: Request, res: Response, next: NextFunction) {
+export function preventDataExposure(req: Request, res: Response, next: NextFunction): void {
   const originalJson = res.json;
   
   res.json = function(obj: any) {
@@ -199,7 +199,7 @@ function sanitizeResponseData(data: any): any {
 /**
  * Middleware to log security events
  */
-export function securityLogger(req: Request, res: Response, next: NextFunction) {
+export function securityLogger(req: Request, res: Response, next: NextFunction): void {
   const startTime = Date.now();
   
   // Log request details
@@ -230,7 +230,7 @@ export function securityLogger(req: Request, res: Response, next: NextFunction) 
       console.warn('Security-related error:', responseLog);
     }
 
-    return originalEnd.apply(this, args);
+    return originalEnd.apply(this, args as Parameters<typeof originalEnd>);
   };
 
   next();

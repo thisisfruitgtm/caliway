@@ -134,7 +134,7 @@ export class WidgetApiService implements IWidgetApiService {
       const config = await this.getWidgetConfig(companyId);
 
       // Generate the widget script with configuration
-      const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
+      const baseUrl = process.env.BASE_URL || 'http://caliway.thisisfruit.com';
       
       const script = `
 (function() {

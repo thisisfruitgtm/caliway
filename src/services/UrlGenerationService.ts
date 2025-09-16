@@ -26,7 +26,7 @@ export class UrlGenerationService implements IUrlGenerationService {
     private companyRepository: ICompanyRepository,
     baseUrl?: string
   ) {
-    this.baseUrl = baseUrl || process.env.BASE_URL || 'http://localhost:3000';
+    this.baseUrl = baseUrl || process.env.BASE_URL || 'http://caliway.thisisfruit.com';
   }
 
   /**

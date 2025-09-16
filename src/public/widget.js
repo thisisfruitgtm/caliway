@@ -19,7 +19,7 @@
     this.options = Object.assign({}, DEFAULT_CONFIG, options);
     this.containerId = options.containerId || 'calendar-widget';
     this.companyId = options.companyId;
-    this.apiUrl = options.apiUrl || 'http://localhost:3000';
+    this.apiUrl = options.apiUrl || 'http://caliway.thisisfruit.com';
     this.events = [];
     this.container = null;
     
